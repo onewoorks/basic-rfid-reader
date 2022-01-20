@@ -3,6 +3,7 @@ import serial
 import sys
 import time
 from rethinkdb import RethinkDB
+import binascii
 
 
 class UHFReader18:
@@ -59,46 +60,46 @@ class UHFReader18:
         self.sr.open()
         self.crc = crcmod.predefined.Crc('crc-16-mcrf4xx')
     
-    def get_inventory(self):
-        r = RethinkDB()
-        r.connect('127.0.0.1', 28015).repl()
-        # spe = r.db('spe').table('uhf_rfid')
-        print('----------------------------------------------------------------')
+    def get_inventory(self,):
+        print('--------------------------')
         print("SCANNING IN PROGRESS")
-        print('----------------------------------------------------------------')
+        print('--------------------------')
+        # self.read_single_time()
+        self.read_multiple_times()
+       
+    def read_multiple_times(self):
         items_found = []
-        t_end = time.time() + 2
+        t_end = time.time() + 10 * 3
         while time.time() < t_end:
             self.send(self.ADDR_BROADCAST, 0x01)
-            recv = self.recv()
-            out = list(recv)
-            epcs = out[4:-2]
-            n = 13
-            x = [epcs[i:i + n] for i in range(0, len(epcs), n)] 
-            for a in x:
-                scanned = ""
-                for y in a:
-                    scanned += "{}".format(str(y).zfill(3))
-                r.db('spe').table("uhf_rfid").insert({
-                        "rfid_hexa":scanned
-                        }).run()
-                print('scanned: {}'.format(scanned))
-                items_found.append(scanned)
+            response        = self.recv()
+            response        = response[4:-2]
+            epcs            = self.epc_string(response)
+            for i in epcs:
+                if i not in items_found:
+                    items_found.append(i)
         self.clean_found_items(items_found)
-    
+
+    def read_single_time(self):
+        self.send(self.ADDR_BROADCAST, 0x01)
+        output          = self.sr.read(1)
+        response        = self.sr.read(output[0])
+        total_found     = response[3]
+        response        = response[4:-2]
+        epcs            = self.epc_string(response)
+        print("Total Tags Read : {}\n".format( total_found if total_found != 242 else "ralat"))
+        self.clean_found_items(epcs)
+
     def clean_found_items(self, items_found):
         data = items_found
-        unique_epc = []
+        print('--------------------------')
+        print('FINAL SCANNED RESULT : ')
+        print('--------------------------')
         for i in data:
-            if i not in unique_epc:
-                unique_epc.append(i)
-        print('SCANNED RESULT : ')
-        print('----------------------------------------------------------------')
-        for n in unique_epc:
-            print(n)
-        print('----------------------------------------------------------------')
-        print("TOTAL ITEMS FOUND : {}".format(len(unique_epc)))
-        print('----------------------------------------------------------------')
+            print(i)
+        print('--------------------------')
+        print("TOTAL ITEMS FOUND : {}".format(len(data)))
+        print('--------------------------')
 
     def send(self, addr, cmd, args=bytes([])):
         self.sr.flushInput()
@@ -109,6 +110,22 @@ class UHFReader18:
         crc = self.get_crc(msg)
         msg = msg + bytes([crc[1], crc[0]])
         self.sr.write(msg)
+
+    def epc_string(self, payload):
+        r = RethinkDB()
+        r.connect('127.0.0.1', 28015).repl()
+        items = []
+        payload = payload.hex().upper()
+        n = 26
+        x = [payload[i:i + n] for i in range(0, len(payload), n)]
+        for a in x:
+            r.db('spe').table('uhf_rfid').insert({
+                "epc": a
+            }).run()
+            if a not in items:
+                items.append(a)
+        return items
+        # return []
     
     def recv(self):
         count = self.sr.read(1)
